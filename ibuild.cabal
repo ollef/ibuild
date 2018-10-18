@@ -14,11 +14,14 @@ extra-source-files:  README.md
 cabal-version:       >=1.10
 
 library
+  ghc-options: -Wall
   hs-source-dirs:      src
   exposed-modules:
+                       Store
                        Task
   build-depends:       base >= 4.7 && < 5
                      , dependent-map
+                     , hashable
                      , mtl
                      , protolude
   default-language:    Haskell2010
