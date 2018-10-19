@@ -20,6 +20,7 @@ import qualified DSet
 import Store
 import VerifyingTraces(VT)
 import qualified VerifyingTraces as VT
+import Hashed
 
 infixl 1 >>=.
 infixl 4 <*>.
@@ -145,12 +146,12 @@ instance MonadState s (Wrap s extra k v) where
 vtRebuilder :: (GCompare k, forall i. Hashable (v i)) => Rebuilder Monad (VT k v) k v
 vtRebuilder key value task = Task $ \fetch_ -> do
   vt <- get
-  upToDate <- VT.verify key (VT.hashed value) (map VT.hashed . fetch_) vt
+  upToDate <- VT.verify key (hashed value) (map hashed . fetch_) vt
   if upToDate then
     return value
   else do
     (newValue, deps) <- track task fetch_
-    modify $ VT.record key (VT.hashed newValue) $ DMap.map VT.hashed deps
+    modify $ VT.record key (hashed newValue) $ DMap.map hashed deps
     return newValue
 
 shake :: (GCompare k, forall i. Hashable (v i)) => Build Monad (VT k v) k v

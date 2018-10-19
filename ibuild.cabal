@@ -18,6 +18,7 @@ library
   hs-source-dirs:      src
   exposed-modules:
                        DSet
+                       Hashed
                        Store
                        Task
                        VerifyingTraces
