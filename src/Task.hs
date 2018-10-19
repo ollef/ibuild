@@ -97,10 +97,10 @@ track task fetch_ = flip runStateT mempty $ runTask task $ \k -> do
   return v
 
 busy
-  :: forall c s k v
-  . (GCompare k, forall i. Hashable (v i), forall f. Functor f => c f)
-  => Build c s k v
-busy (tasks :: Tasks c k v) key store = execState (fetch_ key) store
+  :: forall s k v
+  . GCompare k
+  => Build Monad s k v
+busy (tasks :: Tasks Monad k v) key store = execState (fetch_ key) store
   where
     fetch_ :: k i -> State (Store s k v) (v i)
     fetch_ k = do
@@ -113,7 +113,7 @@ busy (tasks :: Tasks c k v) key store = execState (fetch_ key) store
 
 suspending
   :: forall s k v
-  . (GCompare k, forall i. Hashable (v i))
+  . GCompare k
   => Scheduler Monad s s k v
 suspending (rebuilder :: Rebuilder Monad s k v) (tasks :: Tasks Monad k v) target store
   = fst $ execState (fetch_ target) (store, mempty)
