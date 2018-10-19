@@ -31,15 +31,15 @@ verify k v fetchHash vt = case DMap.lookup k vt of
        allM (DMap.toList deps) $ \(depKey :=> depValue) -> do
         depValue' <- fetchHash depKey
         return $ hash depValue == hash depValue'
-
-allM :: Monad m => [a] -> (a -> m Bool) -> m Bool
-allM [] _ = return True
-allM (x:xs) p = do
-  b <- p x
-  if b then
-    allM xs p
-  else
-    return False
+  where
+    allM :: Monad m => [a] -> (a -> m Bool) -> m Bool
+    allM [] _ = return True
+    allM (x:xs) p = do
+      b <- p x
+      if b then
+        allM xs p
+      else
+        return False
 
 record
   :: GCompare k
