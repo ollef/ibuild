@@ -1,10 +1,12 @@
 {-# language ConstraintKinds #-}
+{-# language FlexibleInstances #-}
 {-# language GADTs #-}
+{-# language GeneralizedNewtypeDeriving #-}
+{-# language MultiParamTypeClasses #-}
 {-# language QuantifiedConstraints #-}
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving #-}
-{-# language UndecidableInstances #-}
 module Task where
 
 import Protolude
@@ -12,7 +14,14 @@ import Protolude
 import Control.Monad.Writer
 import Data.Dependent.Map(GCompare, Some(This), DSum((:=>)))
 
+import DSet(DSet)
+import qualified DSet
 import Store
+
+infixl 1 >>=.
+infixl 4 <*>.
+infixl 4 *>.
+infixl 4 <$>.
 
 newtype Task c k v a = Task
   { runTask
@@ -24,27 +33,42 @@ newtype Task c k v a = Task
 fetch :: k i -> Task c k v (v i)
 fetch k = Task $ \f -> f k
 
-instance (forall f. c f => Functor f) => Functor (Task c k v) where
-  fmap f (Task g) = Task $ \fetch_ -> map f $ g fetch_
-  a <$ Task g = Task $ \fetch_ -> a <$ g fetch_
+liftAction :: (forall f. c f => f a) -> Task c k v a
+liftAction fa = Task $ \_ -> fa
 
-instance (forall f. c f => Applicative f) => Applicative (Task c k v) where
-  pure x = Task $ \_ -> pure x
-  Task f <*> Task x = Task $ \fetch_ -> f fetch_ <*> x fetch_
-  liftA2 f (Task x) (Task y) = Task $ \fetch_ -> liftA2 f (x fetch_) (y fetch_)
-  Task x *> Task y = Task $ \fetch_ -> x fetch_ *> y fetch_
-  Task x <* Task y = Task $ \fetch_ -> x fetch_ <* y fetch_
+map_ :: (forall f. c f => Functor f) => (a -> b) -> Task c k v a -> Task c k v b
+map_ f (Task g) = Task $ \fetch_ -> map f $ g fetch_
 
-instance (forall f. c f => Monad f) => Monad (Task c k v) where
-  Task a >>= f = Task $ \fetch_ -> do
-    x <- a fetch_
-    runTask (f x) fetch_
-  Task a >> Task b = Task $ \fetch_ -> do
-    a fetch_ >> b fetch_
-  return x = Task $ \_ -> pure x
-  fail x = Task $ \_ -> fail x
+(<$>.) :: (forall f. c f => Functor f) => (a -> b) -> Task c k v a -> Task c k v b
+(<$>.) = map_
 
-type Tasks c k v = forall i. k i -> Task c k v (v i)
+pure_ :: (forall f. c f => Applicative f) => a -> Task c k v a
+pure_ a = Task $ \_ -> pure a
+
+(<*>.)
+  :: (forall f. c f => Applicative f)
+  => Task c k v (a -> b)
+  -> Task c k v a
+  -> Task c k v b
+Task f <*>. Task x = Task $ \fetch_ -> f fetch_ <*> x fetch_
+
+(*>.)
+  :: (forall f. c f => Applicative f)
+  => Task c k v a
+  -> Task c k v b
+  -> Task c k v b
+Task a *>. Task b = Task $ \fetch_ -> a fetch_ *> b fetch_
+
+(>>=.)
+  :: (forall f. c f => Monad f)
+  => Task c k v a
+  -> (a -> Task c k v b)
+  -> Task c k v b
+Task a >>=. f = Task $ \fetch_ -> do
+  x <- a fetch_
+  runTask (f x) fetch_
+
+type Tasks c k v = forall i. k i -> Maybe (Task c k v (v i))
 
 type Build c s k v = forall i. Tasks c k v -> k i -> Store s k v -> Store s k v
 
@@ -59,9 +83,8 @@ dependencies :: (forall f. Applicative f => c f) => Task c k v i -> [Some k]
 dependencies task = getConst $ runTask task (\k -> Const [This k])
 
 track
-  :: forall m k v a c
-  . (Monad m, forall f. Functor f => c f)
-  => Task c k v a
+  :: Monad m
+  => Task Functor k v a
   -> (forall i'. k i' -> m (v i'))
   -> m (a, [DSum k v])
 track task fetch_ = runWriterT $ runTask task $ \k -> do
@@ -69,19 +92,52 @@ track task fetch_ = runWriterT $ runTask task $ \k -> do
   tell [k :=> v]
   return v
 
-busy :: forall c s k v. (GCompare k, forall i. Hashable (v i), forall f. Functor f => c f) => Build c s k v
+busy
+  :: forall c s k v
+  . (GCompare k, forall i. Hashable (v i), forall f. Functor f => c f)
+  => Build c s k v
 busy (tasks :: Tasks c k v) key store = execState (fetch_ key) store
   where
     fetch_ :: k i -> State (Store s k v) (v i)
     fetch_ k = do
-      mv <- gets $ getValue k
-      case mv of
-        Just v -> return v
-        Nothing -> do
-          v <- runTask (tasks k) fetch_
+      case tasks k of
+        Nothing -> gets $ getValue k
+        Just task -> do
+          v <- runTask task fetch_
           modify $ putValue k v
           return v
 
+suspending
+  :: forall s k v
+  . (GCompare k, forall i. Hashable (v i))
+  => Scheduler Monad s s k v
+suspending (rebuilder :: Rebuilder Monad s k v) (tasks :: Tasks Monad k v) target store
+  = fst $ execState (fetch_ target) (store, mempty)
+  where
+    fetch_ :: forall i. k i -> State (Store s k v, DSet k) (v i)
+    fetch_ key = do
+      done <- gets snd
+      case tasks key of
+        Just task | key `DSet.notMember` done -> do
+          value <- gets $ getValue key . fst
+          let newTask = rebuilder key value task
+          newValue <- liftRun newTask fetch_
+          modify $ \(s, d) -> (putValue key newValue s, DSet.insert key d)
+          return newValue
+        _ -> gets $ getValue key . fst
+
+liftRun
+  :: Task (MonadState s) k v a
+  -> (forall i. k i -> State (Store s k v, extra) (v i))
+  -> State (Store s k v, extra) a
+liftRun t f = unwrap $ runTask t (Wrap . f)
+
+newtype Wrap s extra k v a = Wrap { unwrap :: State (Store s k v, extra) a }
+  deriving (Functor, Applicative, Monad)
+
+instance MonadState s (Wrap s extra k v) where
+  get = Wrap $ gets (getInfo . fst)
+  put s = Wrap $ modify $ \(store, extra) -> (putInfo s store, extra)
 
 -------------------------------------------------------------------------------
 data ModuleName = ModuleName
@@ -101,13 +157,13 @@ type CompilerTask = Task Monad TaskKey Identity
 type CompilerTasks = Tasks Monad TaskKey Identity
 
 compilerTasks :: CompilerTasks
-compilerTasks (ParseModuleHeader mname) = Identity <$> parseModuleHeader mname
-compilerTasks (ParseModule mname) = Identity <$> parseModule mname
+compilerTasks (ParseModuleHeader mname) = Just $ Identity <$>. parseModuleHeader mname
+compilerTasks (ParseModule mname) = Just $ Identity <$>. parseModule mname
 
 parseModuleHeader :: ModuleName -> CompilerTask (ModuleHeader, Text)
-parseModuleHeader mname = return (ModuleHeader mname, "")
+parseModuleHeader mname = pure_ (ModuleHeader mname, "")
 
 parseModule :: ModuleName -> CompilerTask ParsedModule
-parseModule mname = do
-  Identity (header, _t) <- fetch $ ParseModuleHeader mname
-  pure $ ParsedModule header
+parseModule mname =
+  fetch (ParseModuleHeader mname) >>=. \(Identity (header, _t)) ->
+  pure_ $ ParsedModule header

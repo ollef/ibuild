@@ -17,6 +17,7 @@ library
   ghc-options: -Wall
   hs-source-dirs:      src
   exposed-modules:
+                       DSet
                        Store
                        Task
   build-depends:       base >= 4.7 && < 5

@@ -39,11 +39,11 @@ getInfo = storeState
 putInfo :: s -> Store s k v -> Store s k v
 putInfo i s = s { storeState = i }
 
-getValue :: GCompare k => k i -> Store s k v -> Maybe (v i)
-getValue k = fmap unhashed . getHashed k
+getValue :: GCompare k => k i -> Store s k v -> v i
+getValue k = unhashed . getHashed k
 
-getHashed :: GCompare k => k i -> Store s k v -> Maybe (Hashed v i)
-getHashed k = DMap.lookup k . storeCache
+getHashed :: GCompare k => k i -> Store s k v -> Hashed v i
+getHashed k = fromMaybe (panic "getHashed: No such key") . DMap.lookup k . storeCache
 
 putValue :: (Hashable (v i), GCompare k) => k i -> v i -> Store s k v -> Store s k v
 putValue k v s = s { storeCache = DMap.insert k (hashed v) $ storeCache s }
