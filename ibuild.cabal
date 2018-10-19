@@ -14,7 +14,16 @@ extra-source-files:  README.md
 cabal-version:       >=1.10
 
 library
-  ghc-options: -Wall
+  ghc-options:         -Wall
+                       -Wcompat
+                       -Widentities
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -Wmissing-home-modules
+                       -Wpartial-fields
+                       -Wredundant-constraints
+                       -Wtabs
+                       -funbox-strict-fields
   hs-source-dirs:      src
   exposed-modules:
                        DSet
