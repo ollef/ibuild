@@ -1,27 +1,13 @@
-{-# language DeriveGeneric #-}
 module Store where
 
 import Protolude
 
 import Data.Dependent.Map(DMap, GCompare)
 import qualified Data.Dependent.Map as DMap
-import Data.Hashable(Hashable, hash)
-
-data Hashed v i = Hashed !(v i) !Int
-  deriving (Eq, Ord, Show, Generic)
-
-hashed :: Hashable (v i) => v i -> Hashed v i
-hashed x = Hashed x (hash x)
-
-instance Hashable (v i) => Hashable (Hashed v i) where
-  hash (Hashed _ h) = h
-
-unhashed :: Hashed v i -> v i
-unhashed (Hashed x _) = x
 
 data Store s k v = Store
   { storeState :: !s
-  , storeCache :: !(DMap k (Hashed v))
+  , storeCache :: !(DMap k v)
   }
 
 instance (GCompare k, Semigroup s) => Semigroup (Store s k v) where
@@ -40,10 +26,7 @@ putInfo :: s -> Store s k v -> Store s k v
 putInfo i s = s { storeState = i }
 
 getValue :: GCompare k => k i -> Store s k v -> v i
-getValue k = unhashed . getHashed k
+getValue k = fromMaybe (panic "getValue: No such key") . DMap.lookup k . storeCache
 
-getHashed :: GCompare k => k i -> Store s k v -> Hashed v i
-getHashed k = fromMaybe (panic "getHashed: No such key") . DMap.lookup k . storeCache
-
-putValue :: (Hashable (v i), GCompare k) => k i -> v i -> Store s k v -> Store s k v
-putValue k v s = s { storeCache = DMap.insert k (hashed v) $ storeCache s }
+putValue :: GCompare k => k i -> v i -> Store s k v -> Store s k v
+putValue k v s = s { storeCache = DMap.insert k v $ storeCache s }

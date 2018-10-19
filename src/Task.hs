@@ -11,12 +11,15 @@ module Task where
 
 import Protolude
 
-import Control.Monad.Writer
-import Data.Dependent.Map(GCompare, Some(This), DSum((:=>)))
+import Control.Monad.State
+import Data.Dependent.Map(DMap, GCompare, Some(This))
+import qualified Data.Dependent.Map as DMap
 
 import DSet(DSet)
 import qualified DSet
 import Store
+import VerifyingTraces(VT)
+import qualified VerifyingTraces as VT
 
 infixl 1 >>=.
 infixl 4 <*>.
@@ -83,13 +86,13 @@ dependencies :: (forall f. Applicative f => c f) => Task c k v i -> [Some k]
 dependencies task = getConst $ runTask task (\k -> Const [This k])
 
 track
-  :: Monad m
-  => Task Functor k v a
+  :: (GCompare k, Monad m)
+  => Task Monad k v a
   -> (forall i'. k i' -> m (v i'))
-  -> m (a, [DSum k v])
-track task fetch_ = runWriterT $ runTask task $ \k -> do
+  -> m (a, DMap k v)
+track task fetch_ = flip runStateT mempty $ runTask task $ \k -> do
   v <- lift $ fetch_ k
-  tell [k :=> v]
+  modify' $ DMap.insert k v
   return v
 
 busy
@@ -138,6 +141,20 @@ newtype Wrap s extra k v a = Wrap { unwrap :: State (Store s k v, extra) a }
 instance MonadState s (Wrap s extra k v) where
   get = Wrap $ gets (getInfo . fst)
   put s = Wrap $ modify $ \(store, extra) -> (putInfo s store, extra)
+
+vtRebuilder :: (GCompare k, forall i. Hashable (v i)) => Rebuilder Monad (VT k v) k v
+vtRebuilder key value task = Task $ \fetch_ -> do
+  vt <- get
+  upToDate <- VT.verify key (VT.hashed value) (map VT.hashed . fetch_) vt
+  if upToDate then
+    return value
+  else do
+    (newValue, deps) <- track task fetch_
+    modify $ VT.record key (VT.hashed newValue) $ DMap.map VT.hashed deps
+    return newValue
+
+shake :: (GCompare k, forall i. Hashable (v i)) => Build Monad (VT k v) k v
+shake = suspending vtRebuilder
 
 -------------------------------------------------------------------------------
 data ModuleName = ModuleName

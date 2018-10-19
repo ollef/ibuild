@@ -20,6 +20,7 @@ library
                        DSet
                        Store
                        Task
+                       VerifyingTraces
   build-depends:       base >= 4.7 && < 5
                      , dependent-map
                      , hashable
