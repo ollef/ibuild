@@ -12,7 +12,7 @@ module Task where
 import Protolude
 
 import Control.Monad.State
-import Data.Dependent.Map(DMap, GCompare, Some(This))
+import Data.Dependent.Map(DMap, GCompare)
 import qualified Data.Dependent.Map as DMap
 
 import DSet(DSet)
@@ -22,14 +22,9 @@ import VerifyingTraces(VT)
 import qualified VerifyingTraces as VT
 import Hashed
 
-infixl 1 >>=.
-infixl 4 <*>.
-infixl 4 *>.
-infixl 4 <$>.
-
 newtype Task c k v a = Task
   { runTask
-  :: forall f. c f
+  :: forall f. (c f, Monad f)
   => (forall i. k i -> f (v i))
   -> f a
   }
@@ -37,40 +32,20 @@ newtype Task c k v a = Task
 fetch :: k i -> Task c k v (v i)
 fetch k = Task $ \f -> f k
 
-liftAction :: (forall f. c f => f a) -> Task c k v a
+liftAction :: (forall f. (c f, Monad f) => f a) -> Task c k v a
 liftAction fa = Task $ \_ -> fa
 
-map_ :: (forall f. c f => Functor f) => (a -> b) -> Task c k v a -> Task c k v b
-map_ f (Task g) = Task $ \fetch_ -> map f $ g fetch_
+instance Functor (Task c k v) where
+  fmap f (Task g) = Task $ \fetch_ -> map f $ g fetch_
 
-(<$>.) :: (forall f. c f => Functor f) => (a -> b) -> Task c k v a -> Task c k v b
-(<$>.) = map_
+instance Applicative (Task c k v) where
+  pure a = Task $ \_ -> pure a
+  Task f <*> Task x = Task $ \fetch_ -> f fetch_ <*> x fetch_
 
-pure_ :: (forall f. c f => Applicative f) => a -> Task c k v a
-pure_ a = Task $ \_ -> pure a
-
-(<*>.)
-  :: (forall f. c f => Applicative f)
-  => Task c k v (a -> b)
-  -> Task c k v a
-  -> Task c k v b
-Task f <*>. Task x = Task $ \fetch_ -> f fetch_ <*> x fetch_
-
-(*>.)
-  :: (forall f. c f => Applicative f)
-  => Task c k v a
-  -> Task c k v b
-  -> Task c k v b
-Task a *>. Task b = Task $ \fetch_ -> a fetch_ *> b fetch_
-
-(>>=.)
-  :: (forall f. c f => Monad f)
-  => Task c k v a
-  -> (a -> Task c k v b)
-  -> Task c k v b
-Task a >>=. f = Task $ \fetch_ -> do
-  x <- a fetch_
-  runTask (f x) fetch_
+instance Monad (Task c k v) where
+  Task a >>= f = Task $ \fetch_ -> do
+    x <- a fetch_
+    runTask (f x) fetch_
 
 type Tasks c k v = forall i. k i -> Maybe (Task c k v (v i))
 
@@ -80,11 +55,8 @@ type Rebuilder c s k v = forall i. k i -> v i -> Task c k v (v i) -> Task (Monad
 
 type Scheduler c s sr k v = Rebuilder c sr k v -> Build c s k v
 
-perpetualRebuilder :: (forall f. MonadState s f => c f) => Rebuilder c s k v
+perpetualRebuilder :: Rebuilder (MonadState s) s k v
 perpetualRebuilder _k _v task = Task $ runTask task
-
-dependencies :: (forall f. Applicative f => c f) => Task c k v i -> [Some k]
-dependencies task = getConst $ runTask task (\k -> Const [This k])
 
 track
   :: (GCompare k, Monad m)
@@ -175,13 +147,13 @@ type CompilerTask = Task Monad TaskKey Identity
 type CompilerTasks = Tasks Monad TaskKey Identity
 
 compilerTasks :: CompilerTasks
-compilerTasks (ParseModuleHeader mname) = Just $ Identity <$>. parseModuleHeader mname
-compilerTasks (ParseModule mname) = Just $ Identity <$>. parseModule mname
+compilerTasks (ParseModuleHeader mname) = Just $ Identity <$> parseModuleHeader mname
+compilerTasks (ParseModule mname) = Just $ Identity <$> parseModule mname
 
 parseModuleHeader :: ModuleName -> CompilerTask (ModuleHeader, Text)
-parseModuleHeader mname = pure_ (ModuleHeader mname, "")
+parseModuleHeader mname = pure (ModuleHeader mname, "")
 
 parseModule :: ModuleName -> CompilerTask ParsedModule
-parseModule mname =
-  fetch (ParseModuleHeader mname) >>=. \(Identity (header, _t)) ->
-  pure_ $ ParsedModule header
+parseModule mname = do
+  Identity (header, _t) <- fetch (ParseModuleHeader mname)
+  pure $ ParsedModule header
