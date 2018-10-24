@@ -1,4 +1,5 @@
 {-# language ConstraintKinds #-}
+{-# language DeriveGeneric #-}
 {-# language FlexibleInstances #-}
 {-# language GADTs #-}
 {-# language GeneralizedNewtypeDeriving #-}
@@ -47,7 +48,7 @@ instance Monad (Task c k v) where
     x <- a fetch_
     runTask (f x) fetch_
 
-type Tasks c k v = forall i. k i -> Maybe (Task c k v (v i))
+type Tasks c k v = forall i. k i -> Task c k v (v i)
 
 type Build c s k v = forall i. Tasks c k v -> k i -> Store s k v -> Store s k v
 
@@ -76,12 +77,9 @@ busy (tasks :: Tasks Monad k v) key store = execState (fetch_ key) store
   where
     fetch_ :: k i -> State (Store s k v) (v i)
     fetch_ k = do
-      case tasks k of
-        Nothing -> gets $ getValue k
-        Just task -> do
-          v <- runTask task fetch_
-          modify $ putValue k v
-          return v
+      v <- runTask (tasks k) fetch_
+      modify $ putValue k v
+      return v
 
 suspending
   :: forall s k v
@@ -93,14 +91,14 @@ suspending (rebuilder :: Rebuilder Monad s k v) (tasks :: Tasks Monad k v) targe
     fetch_ :: forall i. k i -> State (Store s k v, DSet k) (v i)
     fetch_ key = do
       done <- gets snd
-      case tasks key of
-        Just task | key `DSet.notMember` done -> do
-          value <- gets $ getValue key . fst
-          let newTask = rebuilder key value task
-          newValue <- liftRun newTask fetch_
-          modify $ \(s, d) -> (putValue key newValue s, DSet.insert key d)
-          return newValue
-        _ -> gets $ getValue key . fst
+      if key `DSet.notMember` done then do
+        value <- gets $ getValue key . fst
+        let newTask = rebuilder key value $ tasks key
+        newValue <- liftRun newTask fetch_
+        modify $ \(s, d) -> (putValue key newValue s, DSet.insert key d)
+        return newValue
+      else
+        gets $ getValue key . fst
 
 liftRun
   :: Task (MonadState s) k v a
@@ -115,31 +113,38 @@ instance MonadState s (Wrap s extra k v) where
   get = Wrap $ gets (getInfo . fst)
   put s = Wrap $ modify $ \(store, extra) -> (putInfo s store, extra)
 
-vtRebuilder :: (GCompare k, forall i. Hashable (v i)) => Rebuilder Monad (VT k v) k v
+vtRebuilder :: (GCompare k, forall i. Hashable (Keyed k v i)) => Rebuilder Monad (VT k v) k v
 vtRebuilder key value task = Task $ \fetch_ -> do
   vt <- get
-  upToDate <- VT.verify key (hashed value) (map hashed . fetch_) vt
+  upToDate <- VT.verify key (hashed key value) (\k -> hashed k <$> fetch_ k) vt
   if upToDate then
     return value
   else do
     (newValue, deps) <- track task fetch_
-    modify $ VT.record key (hashed newValue) $ DMap.map hashed deps
+    modify $ VT.record key (hashed key newValue) $ DMap.mapWithKey hashed deps
     return newValue
 
-shake :: (GCompare k, forall i. Hashable (v i)) => Build Monad (VT k v) k v
+shake :: (GCompare k, forall i. Hashable (Keyed k v i)) => Build Monad (VT k v) k v
 shake = suspending vtRebuilder
 
 -------------------------------------------------------------------------------
 data ModuleName = ModuleName
-  deriving Show
+  deriving (Show, Generic)
+instance Hashable ModuleName
 data ModuleHeader = ModuleHeader ModuleName
-  deriving Show
+  deriving (Show, Generic)
+instance Hashable ModuleHeader
 data ParsedModule = ParsedModule ModuleHeader
-  deriving Show
+  deriving (Show, Generic)
+instance Hashable ParsedModule
 
 data TaskKey a where
   ParseModuleHeader :: ModuleName -> TaskKey (ModuleHeader, Text)
   ParseModule :: ModuleName -> TaskKey ParsedModule
+
+instance Hashable (Keyed TaskKey Identity i) where
+  hashWithSalt s (Keyed ParseModuleHeader {} v) = hashWithSalt s v
+  hashWithSalt s (Keyed ParseModule {} v) = hashWithSalt s v
 
 deriving instance Show (TaskKey a)
 
@@ -147,8 +152,8 @@ type CompilerTask = Task Monad TaskKey Identity
 type CompilerTasks = Tasks Monad TaskKey Identity
 
 compilerTasks :: CompilerTasks
-compilerTasks (ParseModuleHeader mname) = Just $ Identity <$> parseModuleHeader mname
-compilerTasks (ParseModule mname) = Just $ Identity <$> parseModule mname
+compilerTasks (ParseModuleHeader mname) = Identity <$> parseModuleHeader mname
+compilerTasks (ParseModule mname) = Identity <$> parseModule mname
 
 parseModuleHeader :: ModuleName -> CompilerTask (ModuleHeader, Text)
 parseModuleHeader mname = pure (ModuleHeader mname, "")

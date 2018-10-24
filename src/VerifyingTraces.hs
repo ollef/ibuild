@@ -48,4 +48,4 @@ record
   -> DMap k (Hashed v)
   -> VT k v
   -> VT k v
-record k v deps = DMap.insert k (ValueDeps v deps)
+record k v deps = DMap.insert k $ ValueDeps v deps
