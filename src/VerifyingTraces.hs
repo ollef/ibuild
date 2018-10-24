@@ -1,10 +1,16 @@
+{-# language FlexibleInstances #-}
+{-# language MultiParamTypeClasses #-}
 {-# language RankNTypes #-}
+{-# language StandaloneDeriving #-}
 module VerifyingTraces where
 
 import Protolude
 
 import Data.Dependent.Map(DMap, GCompare, DSum((:=>)))
 import qualified Data.Dependent.Map as DMap
+import Data.Dependent.Sum
+import Data.GADT.Show
+import Text.Show
 
 import Hashed
 
@@ -12,6 +18,12 @@ data ValueDeps k v i = ValueDeps
   { value :: !(Hashed v i)
   , dependencies :: !(DMap k (Hashed v))
   }
+
+deriving instance (ShowTag k v, Show (v i)) => Show (ValueDeps k v i)
+
+instance (GShow k, ShowTag k v) => ShowTag k (ValueDeps k v) where
+  showTaggedPrec k d (ValueDeps v deps) = showParen (d > 10)
+    $ showString "ValueDeps " . showTaggedPrec k 11 v . showString " " . showsPrec 11 deps
 
 type VT k v = DMap k (ValueDeps k v)
 

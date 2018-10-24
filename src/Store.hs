@@ -8,7 +8,7 @@ import qualified Data.Dependent.Map as DMap
 data Store s k v = Store
   { storeState :: !s
   , storeCache :: !(DMap k v)
-  }
+  } deriving Show
 
 instance (GCompare k, Semigroup s) => Semigroup (Store s k v) where
   Store s1 c1 <> Store s2 c2 = Store (s1 <> s2) (c1 <> c2)

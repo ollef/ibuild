@@ -15,13 +15,17 @@ import Protolude
 import Control.Monad.State
 import Data.Dependent.Map(DMap, GCompare)
 import qualified Data.Dependent.Map as DMap
+import Data.Dependent.Sum
+import Data.GADT.Compare
+import Data.GADT.Show
+import Text.Show
 
 import DSet(DSet)
 import qualified DSet
+import Hashed
 import Store
 import VerifyingTraces(VT)
 import qualified VerifyingTraces as VT
-import Hashed
 
 newtype Task c k v a = Task
   { runTask
@@ -113,7 +117,7 @@ instance MonadState s (Wrap s extra k v) where
   get = Wrap $ gets (getInfo . fst)
   put s = Wrap $ modify $ \(store, extra) -> (putInfo s store, extra)
 
-vtRebuilder :: (GCompare k, forall i. Hashable (Keyed k v i)) => Rebuilder Monad (VT k v) k v
+vtRebuilder :: (GCompare k, HashTag k v) => Rebuilder Monad (VT k v) k v
 vtRebuilder key value task = Task $ \fetch_ -> do
   vt <- get
   upToDate <- VT.verify key (hashed key value) (\k -> hashed k <$> fetch_ k) vt
@@ -124,7 +128,7 @@ vtRebuilder key value task = Task $ \fetch_ -> do
     modify $ VT.record key (hashed key newValue) $ DMap.mapWithKey hashed deps
     return newValue
 
-shake :: (GCompare k, forall i. Hashable (Keyed k v i)) => Build Monad (VT k v) k v
+shake :: (GCompare k, HashTag k v) => Build Monad (VT k v) k v
 shake = suspending vtRebuilder
 
 -------------------------------------------------------------------------------
@@ -142,11 +146,11 @@ data TaskKey a where
   ParseModuleHeader :: ModuleName -> TaskKey (ModuleHeader, Text)
   ParseModule :: ModuleName -> TaskKey ParsedModule
 
-instance Hashable (Keyed TaskKey Identity i) where
-  hashWithSalt s (Keyed ParseModuleHeader {} v) = hashWithSalt s v
-  hashWithSalt s (Keyed ParseModule {} v) = hashWithSalt s v
-
 deriving instance Show (TaskKey a)
+
+instance HashTag TaskKey Identity where
+  hashTagged ParseModuleHeader {} = hash
+  hashTagged ParseModule {} = hash
 
 type CompilerTask = Task Monad TaskKey Identity
 type CompilerTasks = Tasks Monad TaskKey Identity
@@ -162,3 +166,61 @@ parseModule :: ModuleName -> CompilerTask ParsedModule
 parseModule mname = do
   Identity (header, _t) <- fetch (ParseModuleHeader mname)
   pure $ ParsedModule header
+
+-------------------------------------------------------------------------------
+data SheetKey a where
+  A :: SheetKey Integer
+  B :: SheetKey Integer
+  C :: SheetKey Integer
+  D :: SheetKey Integer
+
+instance GEq SheetKey where
+  geq a b = case gcompare a b of
+    GLT -> Nothing
+    GEQ -> Just Refl
+    GGT -> Nothing
+
+instance GCompare SheetKey where
+  gcompare A A = GEQ
+  gcompare B B = GEQ
+  gcompare C C = GEQ
+  gcompare D D = GEQ
+  gcompare A _ = GLT
+  gcompare _ A = GGT
+  gcompare B _ = GLT
+  gcompare _ B = GGT
+  gcompare C _ = GLT
+  gcompare _ C = GGT
+
+deriving instance Show (SheetKey a)
+
+instance HashTag SheetKey Identity where
+  hashTagged A = hash
+  hashTagged B = hash
+  hashTagged C = hash
+  hashTagged D = hash
+
+instance GShow SheetKey where
+  gshowsPrec = showsPrec
+
+instance ShowTag SheetKey Identity where
+  showTaggedPrec A = showsPrec
+  showTaggedPrec B = showsPrec
+  showTaggedPrec C = showsPrec
+  showTaggedPrec D = showsPrec
+
+type SheetTask = Task Monad SheetKey Identity
+type SheetTasks = Tasks Monad SheetKey Identity
+
+sheetTasks :: SheetTasks
+sheetTasks A = trace ("computing A" :: Text) $ pure $ Identity 10
+sheetTasks B = trace ("computing B" :: Text) $ do
+  Identity a <- fetch A
+  pure $ Identity $ a + 20
+sheetTasks C = trace ("computing C" :: Text) $ do
+  Identity a <- fetch A
+  pure $ Identity $ a + 30
+sheetTasks D = trace ("computing D" :: Text) $ do
+  Identity b <- fetch B
+  Identity c <- fetch C
+  pure $ Identity $ b + c

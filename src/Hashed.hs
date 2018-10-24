@@ -1,7 +1,16 @@
 {-# language FlexibleContexts #-}
-module Hashed(Hashed, hashed, unhashed, Keyed(Keyed)) where
+{-# language FlexibleInstances #-}
+{-# language MultiParamTypeClasses #-}
+module Hashed(Hashed, hashed, unhashed, HashTag(hashTagged)) where
 
 import Protolude
+
+import Text.Show
+
+import Data.Dependent.Sum
+
+class HashTag k v where
+  hashTagged :: k i -> v i -> Int
 
 data Hashed v i = Hashed !(v i) !Int
   deriving (Show)
@@ -15,10 +24,12 @@ instance Ord (v i) => Ord (Hashed v i) where
 instance Hashable (Hashed v i) where
   hashWithSalt s (Hashed _ h) = hashWithSalt s h
 
+instance ShowTag k v => ShowTag k (Hashed v) where
+  showTaggedPrec k d (Hashed v _) = showParen (d > 10)
+    $ showString "Hashed " . showTaggedPrec k 11 v
+
 unhashed :: Hashed v i -> v i
 unhashed (Hashed x _) = x
 
-data Keyed k v i = Keyed !(k i) !(v i)
-
-hashed :: Hashable (Keyed k v i) => k i -> v i -> Hashed v i
-hashed k v = Hashed v $ hash $ Keyed k v
+hashed :: HashTag k v => k i -> v i -> Hashed v i
+hashed k v = Hashed v $ hashTagged k v
